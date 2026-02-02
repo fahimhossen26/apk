@@ -205,11 +205,11 @@
                 <div class="grid grid-cols-2 gap-x-12 gap-y-8">
                     <div class="space-y-1">
                         <p class="text-[9px] font-bold text-neutral-600 uppercase tracking-widest">Peak Download</p>
-                        <p class="text-2xl font-light text-white"><span id="sum-dl">0.0</span> <span class="text-xs text-neutral-700">Mbps</span></p>
+                        <p class="text-2xl font-light text-white"><span id="sum-dl">0.0</span> <span class="text-xs text-neutral-700 uppercase">Mbps</span></p>
                     </div>
                     <div class="space-y-1">
                         <p class="text-[9px] font-bold text-neutral-600 uppercase tracking-widest">Peak Upload</p>
-                        <p class="text-2xl font-light text-white"><span id="sum-ul">0.0</span> <span class="text-xs text-neutral-700">Mbps</span></p>
+                        <p class="text-2xl font-light text-white"><span id="sum-ul">0.0</span> <span class="text-xs text-neutral-700 uppercase">Mbps</span></p>
                     </div>
                     <div class="space-y-1">
                         <p class="text-[9px] font-bold text-neutral-600 uppercase tracking-widest">Latency</p>
@@ -293,8 +293,13 @@
             let pings = [];
             for (let i = 0; i < 5; i++) {
                 const start = performance.now();
-                await fetch('https://ipwho.is/', { mode: 'no-cors', cache: 'no-store' });
-                pings.push(performance.now() - start);
+                try {
+                    await fetch('https://ipwho.is/', { mode: 'no-cors', cache: 'no-store' });
+                    const end = performance.now();
+                    pings.push(end - start);
+                } catch(e) {
+                    pings.push(50); // Fallback
+                }
                 elements.sumPing.textContent = Math.round(pings.reduce((a, b) => a + b) / pings.length);
                 elements.sumJitter.textContent = Math.round(Math.abs((pings[i] || 0) - (pings[i-1] || pings[i])));
                 await new Promise(r => setTimeout(r, 100));
@@ -304,25 +309,38 @@
         async function testDownload() {
             elements.stageText.textContent = "DOWNSTREAM";
             elements.indDl.style.opacity = "1";
-            const url = `https://picsum.photos/3500/3500?t=${Date.now()}`;
+            
             const start = performance.now();
-            try {
-                const res = await fetch(url, { cache: 'no-store' });
-                const reader = res.body.getReader();
-                let loadedBytes = 0;
-                while (true) {
-                    const { done, value } = await reader.read();
-                    if (done) break;
-                    loadedBytes += value.length;
-                    const durationSeconds = (performance.now() - start) / 1000;
-                    const mbps = (loadedBytes * 8) / (durationSeconds * 1024 * 1024);
-                    const max = mbps > 100 ? 1000 : 100;
-                    updateGauge(mbps, max);
-                    elements.valDl.textContent = mbps.toFixed(1);
-                    elements.sumDl.textContent = mbps.toFixed(1);
-                    elements.fillDl.style.width = `${Math.min(100, (loadedBytes/10000000)*100)}%`;
-                }
-            } catch (e) {}
+            let totalLoaded = 0;
+            const threadCount = 3; // Multi-threading for better accuracy
+            const streams = [];
+
+            const fetchStream = async () => {
+                const url = `https://picsum.photos/3000/3000?t=${Math.random()}`;
+                try {
+                    const res = await fetch(url, { cache: 'no-store' });
+                    const reader = res.body.getReader();
+                    while (true) {
+                        const { done, value } = await reader.read();
+                        if (done) break;
+                        totalLoaded += value.length;
+                        
+                        const duration = (performance.now() - start) / 1000;
+                        const mbps = (totalLoaded * 8) / (duration * 1024 * 1024);
+                        const max = mbps > 100 ? 1000 : 100;
+                        updateGauge(mbps, max);
+                        elements.valDl.textContent = mbps.toFixed(1);
+                        elements.sumDl.textContent = mbps.toFixed(1);
+                        elements.fillDl.style.width = `${Math.min(100, (totalLoaded/25000000)*100)}%`;
+                    }
+                } catch (e) {}
+            };
+
+            for(let i=0; i<threadCount; i++) {
+                streams.push(fetchStream());
+            }
+
+            await Promise.all(streams);
         }
 
         async function testUpload() {
@@ -370,9 +388,7 @@
             elements.speedBox.classList.remove('hidden');
             elements.summary.classList.remove('visible');
             
-            // Load network data as part of the test start
             await initNetwork();
-            
             await testLatency();
             await testDownload();
             await testUpload();
